@@ -1,0 +1,127 @@
+%Written by Tarjei Nesbø Skreien for the PFC converter project in TET4190,
+%Power Electronics at NTNU. 
+%All values in this script are in SI units. Where the equations are 
+%dependent on non-SI units a conversion factor is tagged on the end to 
+%produce a SI unit result. 
+%The design algorithm is adapted from "Power Electronics - Converters, 
+%applications and design (Third edition)" by Mohan, N., Undeland, T. M. 
+%and Robbins, W. P..  Published by John Wiley and Sons Inc.
+
+
+%% Parameter
+vacuum_permeability = 4*pi*(10^(-7)); %The permeabilty of vacuum
+
+%% Operating conditions
+T_ambient = 80 + 273.15; %The temperature of the sorroundings
+T_surface_maximum = 100 + 273.15; %The inductor maximum surface temperature
+T_Delta = T_surface_maximum - T_ambient; %The temperature gradient from the inductor surface to the environment
+I_load = 10; %The maximum output current, dimensioning current
+V_s_rms = 230; %The rms voltage from source
+V_d = 385; %The output DC voltage
+I_L_ripple = 0.4; %The ripple in inductor current, plus-minus
+I_L_rms = (I_load*V_d)/V_s_rms; %The rms value of the current through the inductor
+I_L_peak = sqrt(2)*I_L_rms + I_L_ripple; %The peak inductor current
+I_L_avg = ((sqrt(2)*2*I_L_rms)/pi); %The average current through the inductor
+
+SW_freq = 20000; %Frequency of the switch
+L_target = 0.0025; %The inductance the inductor is meant to have
+
+%% 3F3 properties at 100 degrees celcius and peak permeability
+flux_density_peak = 0.35; %Chosen to remain within the linear portion of the B-H relation, Tesla
+flux_density_AC = flux_density_peak*((I_L_peak - I_L_avg)/I_L_peak); %The ac portion of the flux density, tesla
+P_core_specific = ( 1.5 * (10^(-6)) * ( (SW_freq/1000)^1.3 )* ((1000*flux_density_AC)^2.5) )*(1000); %The specific hysteresis loss [W/m^3]
+Density_core = 4750; %Density of the core in kg/m^3
+
+%% Properties of the copper wiring at 100 degrees celcius
+resistivity_copper = (1.68*10^(-8))*(1 + (T_surface_maximum - (20+273.15))*0.00404); %Found in data sheet Ohm*m
+k_Cu = 0.3; %The copper fill factor of Litz' wire given a fully wound bobbin, chosen
+Density_copper = 8.96*10^3; %Density of copper, found in datasheet [kg/m^3]
+
+%% The current density, J, given Litz wire copper fill factor and the specific power loss of the winding equal to the specific power loss of the core
+P_winding_specific = P_core_specific; %For optimal thermal diffusion the specific power density of the inductor should be constant according to the litterature
+J_rms_Cu = sqrt(P_winding_specific/(k_Cu*resistivity_copper)); %The current density in the copper as a function of the specific winding loss
+J_rms_winding = J_rms_Cu*k_Cu; %The current density in the winding cross section
+
+%% The wire cross area and diameter
+A_wire = I_L_rms/J_rms_winding; %The wire area needed to have the desired winding current density
+A_Cu = I_L_rms/J_rms_Cu; %The copper area needed to have the desired copper current density
+wire_diameter = sqrt(4*(A_wire)/pi); %The diameter of the wire if it's round
+
+%% Finding the size of the core
+E_stored = L_target*I_L_peak*I_L_rms; %The energy stored in the inductor
+a = (E_stored/(2.1*J_rms_Cu*k_Cu*flux_density_peak))^(1/4); %The characteristic dimension a that defines all core geometries
+
+%% Core geometry (taken from page 751) for double-E core with "a" (width of the central pillar) as found in the previous section
+depth = 1.5*a;
+breadth = a;
+breadth_winding = 0.7*a;
+height_center = 2.5*a;
+height_winding = 2*a;
+A_core = 1.5*a^2;
+A_winding = 1.4*a^2;
+Area_Product = A_core*A_winding;
+V_core = 13.5*a^3;
+V_winding = 12.3*a^3;
+A_total_surface = 59.6*a^2;
+
+
+Weight_core = V_core*Density_core; %The weight of the core, found from the core volume and the density of the material
+Weight_copper = V_winding*k_Cu*Density_copper; %%The weight of the core, found from the copper volume and the density of the material
+Weight_total = Weight_core + Weight_copper; %The weight of the inductor is the weight of copper and core material, insulation weight is ignored.
+
+%% The number of windings before optimizing
+N = A_winding/A_wire;
+N_original = N;
+
+%% Finding the airgap of the core before optimizing step
+Number_of_gaps = 3;
+gap_sum = A_core/( ( (A_core*flux_density_peak)/(vacuum_permeability*N*I_L_peak) ) - ((a+depth)/Number_of_gaps) );
+
+%% The maximum inductance
+L_max = (N*A_core*flux_density_peak)/I_L_peak;
+
+%% Power loss of the inductor
+P_winding = P_winding_specific * V_winding;
+P_core = P_core_specific * V_core;
+P_total = P_core + P_winding;
+
+
+
+
+
+
+
+%% Saving copper by reducing the number of windings
+if L_max > L_target
+    while L_max >L_target
+        N = N-1;
+        L_max = (N*A_core*flux_density_peak)/I_L_peak;
+    end
+    N = N+1;
+    L_max = (N*A_core*flux_density_peak)/I_L_peak;
+end
+
+%% Finding the new airgap of the core after reducing the amount of copper
+gap_sum = A_core/( ( (A_core*flux_density_peak)/(vacuum_permeability*N*I_L_peak) ) - ((a+depth)/Number_of_gaps) );
+
+%% New weight after optimizing number of turns
+Weight_copper = Weight_copper*(N/N_original);
+Weight_total = Weight_core + Weight_copper;
+
+%% New power loss of the inductor after optimizing
+P_winding = P_winding_specific * V_winding*(N/N_original);
+P_core = P_core_specific * V_core;
+P_total = P_core + P_winding;
+
+%% Checking to see that the inductor can successfully dump its lost effect
+Emissivity = 0.9; %I'm assuming a black oxide coating on the coil to maximize emissivity and facilitate heat radiation
+P_rad = 5.7 * (10^(-8)) * Emissivity * A_total_surface * (T_surface_maximum^4 - T_ambient^4); %Stefan Boltzman law, the power lost due to radiation to the environment
+height_vertical_inductor = height_center + a; %The height of the winding plus the width of the core material
+P_conv = 1.34*A_total_surface* ((T_Delta^1.25)/(height_vertical_inductor^0.25)); %The power dumped as heat from convection
+P_total_dumped = P_rad + P_conv; %The total power dumped as heat to the environment
+P_difference = P_total - P_total_dumped; %The difference between power loss and heat dumped, this should be negative
+
+%% The copper resistance
+length_winding = (V_winding*(N/N_original))/(A_wire); %The length of the winding is the volume of the winding divided by the wire area
+R_copper = (length_winding*resistivity_copper)/A_Cu; %The resistance of the copper wire from resistivity, length and cross section, this chould be equal to R_copper_power 
+R_copper_power = P_winding/(I_L_rms^2); %The resistance of the copper found from the power loss in the winding and the rms current through the inductor, this chould be equal to R_copper
